@@ -12,6 +12,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 import time
 from groq import Groq
+from concurrent.futures import ThreadPoolExecutor
 
 app = Flask(__name__)
 
@@ -28,18 +29,34 @@ job_sites = {
     "https://www.naukri.com/zepto-jobs?k=zepto&nignbevent_src=jobsearchDeskGNB": ".srp-jobtuple-wrapper"
 }
 
-async def fetch_html(url, selector, max_jobs=5):
+async def fetch_html(url, selector, max_jobs=3):
     print(f"Starting to fetch HTML from URL: {url}")
     options = Options()
-    options.add_argument("--headless")  # Run in headless mode for server deployment
+    # Extensive optimizations for Chrome in a containerized environment
+    options.add_argument("--headless")
     options.add_argument("--disable-gpu")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-blink-features=AutomationControlled")
-    options.add_argument("--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
+    options.add_argument("--disable-extensions")
+    options.add_argument("--disable-infobars")
+    options.add_argument("--disable-browser-side-navigation")
+    options.add_argument("--disable-features=VizDisplayCompositor")
+    options.add_argument("--disable-setuid-sandbox")
+    options.add_argument("--disable-web-security")
+    options.add_argument("--mute-audio")
+    options.add_argument("--disable-logging")
+    options.add_argument("--log-level=3")
+    options.add_argument("--disable-crash-reporter")
+    options.add_argument("--disable-in-process-stack-traces")
+    options.add_argument("--disable-features=site-per-process")
+    options.add_argument("--memory-pressure-off")
+    options.add_argument("--js-flags=--max-old-space-size=256")  # Limit JavaScript heap
+    options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36")
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
     options.add_experimental_option("useAutomationExtension", False)
     
+    driver = None
     try:
         # For server deployment, we need to handle ChromeDriver installation differently
         if os.environ.get('RENDER'):
@@ -53,33 +70,70 @@ async def fetch_html(url, selector, max_jobs=5):
         
         print("WebDriver initialized and Chrome options set")
         
+        # Set page load timeout to prevent hanging
+        driver.set_page_load_timeout(30)
+        
         print(f"Navigating to {url}")
-        driver.get(url)
-        print("Page navigation completed")
+        try:
+            driver.get(url)
+            print("Page navigation completed")
+        except Exception as e:
+            print(f"Error during page load: {e}")
+            # Return empty content if page load fails
+            return ""
         
         print("Waiting for job listings to load")
-        WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.CSS_SELECTOR, selector)))
-        time.sleep(5)
-        print("Job listings loaded, additional 5-second wait completed")
+        try:
+            # Reduced wait time to prevent timeouts
+            WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, selector)))
+            print("Job listings found")
+            # Reduced sleep time
+            time.sleep(2)
+        except Exception as e:
+            print(f"Warning: Timeout waiting for elements: {e}")
+            # Try to proceed anyway, maybe elements are there but condition wasn't met
+            time.sleep(1)
 
         try:
             print(f"Extracting up to {max_jobs} job-specific divs")
             job_elements = driver.find_elements(By.CSS_SELECTOR, selector)[:max_jobs]
-            html_content = "".join([elem.get_attribute("outerHTML") for elem in job_elements])
-            print(f"Job-specific HTML fetched, length: {len(html_content)}")
+            if not job_elements:
+                print("No job elements found with selector, trying to get page source")
+                html_content = driver.page_source
+            else:
+                html_content = "".join([elem.get_attribute("outerHTML") for elem in job_elements])
+            print(f"Job HTML fetched, length: {len(html_content)}")
+            return html_content
         except Exception as e:
-            print(f"Failed to extract job divs: {e}. Saving full page anyway...")
+            print(f"Failed to extract job divs: {e}. Saving full page...")
             html_content = driver.page_source
-            print(f"Full HTML fetched for debugging, length: {len(html_content)}")
-
-        return html_content
+            print(f"Full HTML fetched, length: {len(html_content)}")
+            return html_content
+    except Exception as e:
+        print(f"Critical error in fetch_html: {str(e)}")
+        return ""
     finally:
-        print("Closing WebDriver")
-        driver.quit()
+        if driver:
+            print("Closing WebDriver")
+            try:
+                driver.quit()
+            except Exception as e:
+                print(f"Error closing driver: {e}")
 
 def parse_jobs_with_llm(html_content, site_name):
+    if not html_content:
+        print(f"No HTML content to parse for {site_name}")
+        return json.dumps({"jobs": []})
+        
     print(f"Starting to parse jobs with LLM for {site_name}")
-    print(f"HTML content length sent to LLM: {len(html_content)}")
+    print(f"HTML content length: {len(html_content)}")
+    
+    # Truncate HTML if too large to prevent token issues
+    max_html_length = 50000  # Approximately 12,500 tokens
+    if len(html_content) > max_html_length:
+        print(f"HTML content too large ({len(html_content)} chars), truncating to {max_html_length}")
+        html_content = html_content[:max_html_length]
+    
     prompt = f"""You are a highly capable AI model tasked with parsing HTML content and extracting structured data. The following is the raw HTML from a job board ({site_name}), containing job listing elements. Your task is to analyze this HTML and extract all available job listings into a JSON object. Use the following structure for the output:
 
 {{
@@ -124,52 +178,72 @@ The HTML content is provided below:
 {html_content}
 """
 
-    print("Sending prompt to Groq API")
-    completion = client.chat.completions.create(
-        model="meta-llama/llama-4-maverick-17b-128e-instruct",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.2,  # Lower temperature for more deterministic parsing
-        max_completion_tokens=4096,  # Increased token limit for more detailed extraction
-        top_p=1,
-        stream=False,
-        response_format={"type": "json_object"},
-        stop=None,
-    )
-    json_response = completion.choices[0].message.content
-    print(f"Received LLM response: {json_response[:500]}...")  # Print first 500 chars to avoid flooding
-    return json_response
+    try:
+        print("Sending prompt to Groq API")
+        completion = client.chat.completions.create(
+            model="meta-llama/llama-4-maverick-17b-128e-instruct",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.2,  # Lower temperature for more deterministic parsing
+            max_completion_tokens=4096,  # Increased token limit for more detailed extraction
+            top_p=1,
+            stream=False,
+            response_format={"type": "json_object"},
+            stop=None,
+        )
+        json_response = completion.choices[0].message.content
+        print(f"Received LLM response: {json_response[:100]}...")  # Print just the beginning to avoid flooding logs
+        return json_response
+    except Exception as e:
+        print(f"Error calling Groq API: {str(e)}")
+        return json.dumps({"jobs": []})
 
-async def scrape_all_jobs(max_jobs=5):
-    all_jobs = {}
-    errors = []
-
-    for url, selector in job_sites.items():
-        print(f"Processing {url}")
-        site_name = url.split('/')[-1]
+async def scrape_single_site(url, selector, max_jobs=3):
+    site_name = url.split('/')[-1]
+    print(f"Processing {site_name}")
+    
+    try:
+        html_content = await fetch_html(url, selector, max_jobs)
+        if not html_content:
+            return site_name, [], f"Failed to fetch HTML for {site_name}"
+            
+        print("HTML fetching completed for", site_name)
+        
+        json_response = parse_jobs_with_llm(html_content, site_name)
+        print("LLM parsing completed for", site_name)
+        
+        cleaned_response = re.sub(r'^\s*```json\s*|\s*```$', '', json_response, flags=re.MULTILINE)
         
         try:
-            html_content = await fetch_html(url, selector, max_jobs)
-            print("HTML fetching completed")
-            
-            print("Starting LLM parsing")
-            json_response = parse_jobs_with_llm(html_content, site_name)
-            print("LLM parsing completed")
-            
-            cleaned_response = re.sub(r'^\s*```json\s*|\s*```$', '', json_response, flags=re.MULTILINE)
-            
-            try:
-                print("Attempting to parse JSON response")
-                jobs = json.loads(cleaned_response)
-                all_jobs[site_name] = jobs["jobs"]
-                print(f"JSON parsed successfully with {len(jobs['jobs'])} jobs")
-            except json.JSONDecodeError as e:
-                print(f"JSON parsing failed: {e}")
-                errors.append(f"Failed to parse JSON for {site_name}: {str(e)}")
-                continue
+            print("Attempting to parse JSON response for", site_name)
+            jobs = json.loads(cleaned_response)
+            return site_name, jobs["jobs"], None
+        except json.JSONDecodeError as e:
+            error_msg = f"Failed to parse JSON for {site_name}: {str(e)}"
+            print(error_msg)
+            return site_name, [], error_msg
                 
-        except Exception as e:
-            print(f"Error processing {site_name}: {str(e)}")
-            errors.append(f"Error processing {site_name}: {str(e)}")
+    except Exception as e:
+        error_msg = f"Error processing {site_name}: {str(e)}"
+        print(error_msg)
+        return site_name, [], error_msg
+
+async def scrape_all_jobs(max_jobs=3):
+    all_jobs = {}
+    errors = []
+    
+    # Process sites concurrently to speed up execution
+    tasks = []
+    for url, selector in job_sites.items():
+        tasks.append(scrape_single_site(url, selector, max_jobs))
+    
+    # Process up to 2 sites concurrently
+    results = await asyncio.gather(*tasks)
+    
+    for site_name, jobs, error in results:
+        if error:
+            errors.append(error)
+        if jobs:
+            all_jobs[site_name] = jobs
     
     result = {
         "success": len(errors) == 0,
@@ -181,13 +255,56 @@ async def scrape_all_jobs(max_jobs=5):
 
 @app.route('/scrape', methods=['GET'])
 def scrape_jobs():
-    max_jobs = request.args.get('max_jobs', default=3, type=int)
-    result = asyncio.run(scrape_all_jobs(max_jobs))
-    return jsonify(result)
+    max_jobs = request.args.get('max_jobs', default=2, type=int)
+    # Limit max_jobs to prevent resource exhaustion
+    max_jobs = min(max_jobs, 5)
+    
+    try:
+        # Set a timeout for the entire scraping operation
+        result = asyncio.run(scrape_all_jobs(max_jobs))
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "jobs": {},
+            "errors": [f"Server error: {str(e)}"]
+        }), 500
 
 @app.route('/health', methods=['GET'])
 def health_check():
     return jsonify({"status": "ok", "message": "Service is running"})
+
+# Add a simple endpoint to check if Chrome is working
+@app.route('/test-chrome', methods=['GET'])
+async def test_chrome():
+    try:
+        options = Options()
+        options.add_argument("--headless")
+        options.add_argument("--disable-gpu")
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
+        
+        if os.environ.get('RENDER'):
+            chrome_path = '/usr/bin/google-chrome-stable'
+            options.binary_location = chrome_path
+            driver = webdriver.Chrome(options=options)
+        else:
+            driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+            
+        driver.get("https://www.google.com")
+        title = driver.title
+        driver.quit()
+        
+        return jsonify({
+            "success": True,
+            "message": "Chrome is working",
+            "title": title
+        })
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "message": f"Chrome test failed: {str(e)}"
+        }), 500
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
