@@ -47,8 +47,11 @@ ENV PYTHONUNBUFFERED=1
 ENV RENDER=true
 ENV PORT=10000
 
+# Allow more memory for Chrome
+ENV NODE_OPTIONS="--max-old-space-size=512"
+
 # Expose port
 EXPOSE 10000
 
-# Start the application with Gunicorn
-CMD gunicorn --bind 0.0.0.0:$PORT app:app
+# Start the application with Gunicorn with increased timeout (180s)
+CMD gunicorn --bind 0.0.0.0:$PORT --timeout 180 --workers 1 --threads 2 app:app
