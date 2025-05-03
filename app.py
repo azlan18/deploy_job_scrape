@@ -24,7 +24,7 @@ client = Groq(api_key=GROQ_API_KEY)
 
 # Backend configuration of URLs and selectors
 job_sites = {
-    # "https://www.naukri.com/ola-jobs-careers-706807": ".srp-jobtuple-wrapper[data-job-id]",
+    "https://www.naukri.com/ola-jobs-careers-706807": ".srp-jobtuple-wrapper[data-job-id]",
     # "https://www.naukri.com/swiggy-jobs?k=swiggy": ".srp-jobtuple-wrapper",
     "https://www.naukri.com/zepto-jobs?k=zepto&nignbevent_src=jobsearchDeskGNB": ".srp-jobtuple-wrapper"
 }
@@ -36,7 +36,7 @@ async def fetch_html(url, selector, max_jobs=3):
     # Extensive optimizations for Chrome in a containerized environment
     options.add_argument("--headless")
     options.add_argument("--disable-gpu")
-    options.add_argument="--no-sandbox")
+    options.add_argument=("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_argument("--disable-extensions")
