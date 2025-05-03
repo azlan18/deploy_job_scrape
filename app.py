@@ -24,7 +24,7 @@ client = Groq(api_key=GROQ_API_KEY)
 
 # Backend configuration of URLs and selectors
 job_sites = {
-    "https://www.naukri.com/ola-jobs-careers-706807": ".srp-jobtuple-wrapper[data-job-id]",
+    # "https://www.naukri.com/ola-jobs-careers-706807": ".srp-jobtuple-wrapper[data-job-id]",
     # "https://www.naukri.com/swiggy-jobs?k=swiggy": ".srp-jobtuple-wrapper",
     "https://www.naukri.com/zepto-jobs?k=zepto&nignbevent_src=jobsearchDeskGNB": ".srp-jobtuple-wrapper"
 }
