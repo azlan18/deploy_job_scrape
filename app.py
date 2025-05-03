@@ -2,6 +2,7 @@ import asyncio
 import re
 import os
 from flask import Flask, jsonify, request
+from flask_cors import CORS  # Import Flask-CORS
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
@@ -15,6 +16,8 @@ from groq import Groq
 from concurrent.futures import ThreadPoolExecutor
 
 app = Flask(__name__)
+# Enable CORS for all routes and all origins
+CORS(app)
 
 # Get Groq API key from environment variables or use the hardcoded one
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "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")
