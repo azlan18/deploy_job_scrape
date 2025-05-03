@@ -1,7 +1,6 @@
 import asyncio
 import re
 import os
-import time
 from flask import Flask, jsonify, request
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
@@ -11,6 +10,7 @@ import json
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+import time
 from groq import Groq
 from concurrent.futures import ThreadPoolExecutor
 
@@ -30,13 +30,12 @@ job_sites = {
 }
 
 async def fetch_html(url, selector, max_jobs=3):
-    start_time = time.time()
     print(f"Starting to fetch HTML from URL: {url}")
     options = Options()
     # Extensive optimizations for Chrome in a containerized environment
     options.add_argument("--headless")
     options.add_argument("--disable-gpu")
-    options.add_argument=("--no-sandbox")
+    options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_argument("--disable-extensions")
@@ -120,11 +119,8 @@ async def fetch_html(url, selector, max_jobs=3):
                 driver.quit()
             except Exception as e:
                 print(f"Error closing driver: {e}")
-        end_time = time.time()
-        print(f"fetch_html took {end_time - start_time:.2f} seconds")
 
 def parse_jobs_with_llm(html_content, site_name):
-    start_time = time.time()
     if not html_content:
         print(f"No HTML content to parse for {site_name}")
         return json.dumps({"jobs": []})
@@ -200,12 +196,8 @@ The HTML content is provided below:
     except Exception as e:
         print(f"Error calling Groq API: {str(e)}")
         return json.dumps({"jobs": []})
-    finally:
-        end_time = time.time()
-        print(f"parse_jobs_with_llm took {end_time - start_time:.2f} seconds")
 
 async def scrape_single_site(url, selector, max_jobs=3):
-    start_time = time.time()
     site_name = url.split('/')[-1]
     print(f"Processing {site_name}")
     
@@ -234,12 +226,8 @@ async def scrape_single_site(url, selector, max_jobs=3):
         error_msg = f"Error processing {site_name}: {str(e)}"
         print(error_msg)
         return site_name, [], error_msg
-    finally:
-        end_time = time.time()
-        print(f"scrape_single_site took {end_time - start_time:.2f} seconds")
 
 async def scrape_all_jobs(max_jobs=3):
-    start_time = time.time()
     all_jobs = {}
     errors = []
     
@@ -263,13 +251,10 @@ async def scrape_all_jobs(max_jobs=3):
         "errors": errors
     }
     
-    end_time = time.time()
-    print(f"scrape_all_jobs took {end_time - start_time:.2f} seconds")
     return result
 
 @app.route('/scrape', methods=['GET'])
 def scrape_jobs():
-    start_time = time.time()
     max_jobs = request.args.get('max_jobs', default=2, type=int)
     # Limit max_jobs to prevent resource exhaustion
     max_jobs = min(max_jobs, 5)
@@ -277,12 +262,8 @@ def scrape_jobs():
     try:
         # Set a timeout for the entire scraping operation
         result = asyncio.run(scrape_all_jobs(max_jobs))
-        end_time = time.time()
-        print(f"scrape_jobs took {end_time - start_time:.2f} seconds")
         return jsonify(result)
     except Exception as e:
-        end_time = time.time()
-        print(f"scrape_jobs took {end_time - start_time:.2f} seconds")
         return jsonify({
             "success": False,
             "jobs": {},
